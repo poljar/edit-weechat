@@ -17,6 +17,14 @@ import shlex
 import subprocess
 import weechat
 
+LIBTMUX = False
+
+try:
+    import libtmux
+    LIBTMUX = True
+except ImportError:
+    pass
+
 
 PATH = os.path.expanduser("~/.weechat/message.txt")
 
@@ -80,6 +88,36 @@ def run_blocking(editor, path, buf):
     read_file(path, buf)
 
 
+def run_tmux(tmux_socket, editor, path, buf):
+    if not LIBTMUX:
+        # TODO print out an error
+        return
+
+    session_id = tmux_socket.split(",")[-1]
+    server = libtmux.Server()
+    session = server.get_by_id("${}".format(session_id))
+    weechat_pane = session.attached_pane
+
+    window_id = weechat_pane.get("window_id")
+    pane_id = weechat_pane.get("pane_id")
+
+    session.new_window(
+        window_name="weechat-edit",
+        window_shell=("{editor} {file} && "
+                      "while read line; "
+                      "do "
+                      "tmux send-keys -lt "
+                      "{session}:{window}.{pane} \"$line\n\";"
+                      " done < {file}".format(
+                          editor=editor,
+                          file=path,
+                          session=session_id,
+                          window=window_id,
+                          pane=pane_id
+                      ))
+    )
+
+
 def edit(data, buf, args):
     editor = (weechat.config_get_plugin("editor")
               or os.environ.get("EDITOR", "vim -f"))
@@ -98,7 +136,11 @@ def edit(data, buf, args):
         f.write(weechat.buffer_get_string(buf, "input"))
 
     if run_externally:
-        hook_editor_process(terminal, editor, PATH, buf)
+        tmux = os.getenv("TMUX")
+        if tmux:
+            run_tmux(tmux, editor, PATH, buf)
+        else:
+            hook_editor_process(terminal, editor, PATH, buf)
     else:
         run_blocking(editor, PATH, buf)
 
